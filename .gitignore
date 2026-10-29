@@ -1,0 +1,8 @@
+# generated local artefacts
+bin/
+certs/
+out/
+
+# tooling
+.claude/hook-logs/
+.DS_Store

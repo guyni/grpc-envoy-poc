@@ -1,0 +1,25 @@
+# A/B probe: the same backend routed with a core Ingress + the Traefik h2c annotation.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grpc-ref-core
+  namespace: grpc-poc
+  annotations:
+    traefik.ingress.kubernetes.io/service.serversscheme: h2c
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - grpc-ref.localtest.me
+      secretName: grpc-poc-tls
+  rules:
+    - host: grpc-ref.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: example-math
+                port:
+                  number: 50005

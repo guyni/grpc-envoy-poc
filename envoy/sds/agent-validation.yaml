@@ -1,0 +1,11 @@
+version_info: "1"
+resources:
+  - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+    name: agent-validation
+    validation_context:
+      trusted_ca: { filename: /etc/envoy/tls/current/agent-ca.crt }
+      # Accept only identities issued for this target cluster.
+      match_typed_subject_alt_names:
+        - san_type: URI
+          matcher: { prefix: "spiffe://example.com/cluster/poc/node/" }
+      watched_directory: { path: /etc/envoy/tls }

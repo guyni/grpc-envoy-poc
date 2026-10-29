@@ -1,0 +1,43 @@
+# Cluster-wide PKI for this POC, mirroring how launchpad-template provisions its
+# laptop PKI: one disposable self-signed root, one long-lived CA certificate, and
+# one CA ClusterIssuer that signs application certificates.
+#
+# The resource names deliberately keep the `launchpad-` prefix so the manifests in
+# this repo (deploy/10-certs.yaml references ClusterIssuer/launchpad-ca-issuer, and
+# the scripts read Secret cert-manager/launchpad-ca-tls) are identical whether they
+# run against a cluster this repo created or against a pre-existing shared
+# cluster. A swap to an external PKI means changing the ClusterIssuer only.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: launchpad-selfsigned-root
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: launchpad-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: launchpad-ca
+  secretName: launchpad-ca-tls
+  duration: 87600h    # 10 years
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never  # keep the same CA key across renewals; a new key invalidates children
+  issuerRef:
+    name: launchpad-selfsigned-root
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: launchpad-ca-issuer
+spec:
+  ca:
+    secretName: launchpad-ca-tls

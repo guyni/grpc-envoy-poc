@@ -1,0 +1,189 @@
+# Envoy relay — adapted from grpc_envoy_design_proposal.md §5.
+#
+# POC deltas from the proposal:
+#   - grpc.localtest.me instead of msgbroker.grpc.example.com
+#   - /msgbroker.v1.MsgBroker/Connect instead of /msgbroker.MsgBroker/Connect
+#   - agent SAN prefix spiffe://example.com/cluster/poc/node/
+#   - downstream cap 1200 instead of 2000
+#   - upstream client certificate (relay-client) omitted: the public endpoint
+#     is server-authenticated TLS only in this cluster
+#   - LOGICAL_DNS resolves through the getaddrinfo resolver so the container's
+#     /etc/hosts entry is honoured (c-ares would bypass it)
+#   - stream_flush_timeout removed: Envoy v1.32-latest rejects it as an unknown
+#     HCM field, so the proposal's 30s value is not applied here
+#   - resource_api_version left at AUTO (V3 enum value is rejected by the pinned
+#     binary's YAML parser); AUTO resolves to V3
+node:
+  id: poc-relay
+  cluster: grpc-envoy-poc
+
+overload_manager:
+  refresh_interval: 0.25s
+  resource_monitors:
+    - name: envoy.resource_monitors.fixed_heap
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.resource_monitors.fixed_heap.v3.FixedHeapConfig
+        max_heap_size_bytes: 268435456
+    - name: envoy.resource_monitors.global_downstream_max_connections
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+        max_active_downstream_connections: 1200
+  actions:
+    - name: envoy.overload_actions.stop_accepting_requests
+      triggers:
+        - name: envoy.resource_monitors.fixed_heap
+          threshold: { value: 0.90 }
+    - name: envoy.overload_actions.stop_accepting_connections
+      triggers:
+        - name: envoy.resource_monitors.fixed_heap
+          threshold: { value: 0.95 }
+
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+    - name: node_agents
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8443 }
+      per_connection_buffer_limit_bytes: 1048576
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_params: { tls_minimum_protocol_version: TLSv1_2 }
+                alpn_protocols: [h2]
+                tls_certificate_sds_secret_configs:
+                  - name: relay-server
+                    sds_config:
+                      resource_api_version: AUTO
+                      path_config_source:
+                        path: /etc/envoy/sds/relay-server.yaml
+                validation_context_sds_secret_config:
+                  name: agent-validation
+                  sds_config:
+                    resource_api_version: AUTO
+                    path_config_source:
+                      path: /etc/envoy/sds/agent-validation.yaml
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: agent_relay
+                codec_type: HTTP2
+                use_remote_address: true
+                common_http_protocol_options:
+                  idle_timeout: 0s
+                http2_protocol_options:
+                  max_concurrent_streams: 32
+                # Allow silent, long-lived streams; application heartbeats detect failure.
+                stream_idle_timeout: 0s
+                request_timeout: 0s
+                request_headers_timeout: 10s
+                route_config:
+                  name: agent_routes
+                  virtual_hosts:
+                    - name: agents
+                      domains: ["*"]
+                      request_headers_to_remove:
+                        - x-agent-id
+                        - x-cluster-id
+                        - x-forwarded-client-cert
+                        - x-envoy-retry-on
+                        - x-envoy-retry-grpc-on
+                        - x-envoy-max-retries
+                        - x-envoy-upstream-rq-timeout-ms
+                        - x-envoy-upstream-rq-per-try-timeout-ms
+                      routes:
+                        - match:
+                            path: /msgbroker.v1.MsgBroker/Connect
+                            grpc: {}
+                          route:
+                            cluster: msgbroker
+                            host_rewrite_literal: grpc.localtest.me
+                            timeout: 0s
+                            idle_timeout: 0s
+                        # Do not create an unrestricted forward proxy.
+                        - match: { prefix: / }
+                          direct_response: { status: 404 }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "%START_TIME% %REQ(:PATH)% %PROTOCOL% %RESPONSE_CODE% %GRPC_STATUS% %RESPONSE_FLAGS% %DURATION%ms\n"
+
+  clusters:
+    - name: msgbroker
+      type: LOGICAL_DNS
+      connect_timeout: 10s
+      upstream_connection_options:
+        tcp_keepalive:
+          keepalive_time: 60
+          keepalive_interval: 10
+          keepalive_probes: 3
+      # Close an upstream socket whose sent data stays unacknowledged for 40 s (Linux only).
+      upstream_bind_config:
+        socket_options:
+          - level: 6          # IPPROTO_TCP
+            name: 18          # TCP_USER_TIMEOUT
+            int_value: 40000  # milliseconds
+            state: STATE_PREBIND
+      lb_policy: ROUND_ROBIN
+      dns_lookup_family: V4_ONLY
+      per_connection_buffer_limit_bytes: 1048576
+      typed_dns_resolver_config:
+        name: envoy.network.dns_resolver.getaddrinfo
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
+      load_assignment:
+        cluster_name: msgbroker
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: grpc.localtest.me
+                      port_value: __GRPC_PORT__
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          common_http_protocol_options:
+            idle_timeout: 0s
+          explicit_http_config:
+            http2_protocol_options:
+              max_concurrent_streams: 1024
+              connection_keepalive:
+                interval: 60s
+                timeout: 10s
+                interval_jitter: { value: 15 }
+      circuit_breakers:
+        thresholds:
+          - priority: DEFAULT
+            max_connections: 64
+            max_pending_requests: 2048
+            max_requests: 8192
+            max_retries: 0
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: grpc.localtest.me
+          common_tls_context:
+            tls_params: { tls_minimum_protocol_version: TLSv1_2 }
+            alpn_protocols: [h2]
+            validation_context_sds_secret_config:
+              name: msgbroker-validation
+              sds_config:
+                resource_api_version: AUTO
+                path_config_source:
+                  path: /etc/envoy/sds/msgbroker-validation.yaml

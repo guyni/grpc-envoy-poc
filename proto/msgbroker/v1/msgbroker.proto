@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package msgbroker.v1;
+
+option go_package = "github.com/guyni/grpc-envoy-poc/gen/msgbroker/v1;msgbrokerv1";
+
+// MsgBroker is the synthetic stand-in for the production msgbroker contract:
+// one long-lived, independently authenticated bidirectional stream per agent.
+service MsgBroker {
+  rpc Connect(stream AgentMessage) returns (stream BrokerMessage);
+}
+
+message Hello {
+  string node_id = 1;
+  string cluster_id = 2;
+  string agent_version = 3;
+}
+
+message Heartbeat {
+  int64 sent_unix_nano = 1;
+}
+
+message HeartbeatAck {
+  int64 sent_unix_nano = 1;
+  int64 recv_unix_nano = 2;
+}
+
+message Command {
+  string command_id = 1;
+  string node_id = 2;
+  string kind = 3;
+  bytes payload = 4;
+  int64 issued_unix_nano = 5;
+}
+
+message CommandAck {
+  string command_id = 1;
+  int64 issued_unix_nano = 2;
+  int64 acked_unix_nano = 3;
+}
+
+// Echo is sent by the client and returned unchanged by the broker; the client
+// measures the round trip from sent_unix_nano.
+message Echo {
+  bytes payload = 1;
+  int64 sent_unix_nano = 2;
+}
+
+message Welcome {
+  string session_id = 1;
+  uint64 generation = 2;
+  string cluster_id = 3;
+  string node_id = 4;
+}
+
+message AgentMessage {
+  string node_id = 1;
+  string cluster_id = 2;
+  uint64 seq = 3;
+  oneof payload {
+    Hello hello = 10;
+    Heartbeat heartbeat = 11;
+    CommandAck command_ack = 12;
+    Echo echo = 13;
+  }
+}
+
+message BrokerMessage {
+  uint64 seq = 1;
+  oneof payload {
+    Welcome welcome = 10;
+    HeartbeatAck heartbeat_ack = 11;
+    Command command = 12;
+    Echo echo = 13;
+  }
+}

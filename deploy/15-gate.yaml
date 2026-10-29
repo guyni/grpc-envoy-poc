@@ -1,0 +1,61 @@
+# Phase 1 fast gate: the vendored pahanini example server, plain h2c, behind Traefik.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-math
+  namespace: grpc-poc
+  labels:
+    app: example-math
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: example-math
+  template:
+    metadata:
+      labels:
+        app: example-math
+    spec:
+      containers:
+        - name: server
+          image: poc-example:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50005
+          readinessProbe:
+            tcpSocket:
+              port: 50005
+            initialDelaySeconds: 1
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-math
+  namespace: grpc-poc
+spec:
+  selector:
+    app: example-math
+  ports:
+    - name: grpc
+      port: 50005
+      targetPort: 50005
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: grpc-ref
+  namespace: grpc-poc
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`grpc-ref.localtest.me`)
+      services:
+        - name: example-math
+          port: 50005
+          scheme: h2c
+  tls:
+    secretName: grpc-poc-tls

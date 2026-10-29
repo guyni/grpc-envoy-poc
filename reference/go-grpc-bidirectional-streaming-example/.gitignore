@@ -1,0 +1,12 @@
+# build outputs only — generated *.pb.go files are checked in so this copy is self-contained
+/client
+/server
+*.exe
+*.dll
+*.so
+*.dylib
+
+.vscode
+pkg
+bin
+vendor

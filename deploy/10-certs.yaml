@@ -1,0 +1,39 @@
+# Server certificates come from the existing cert-manager CA issuer.
+# The public gRPC endpoint and the throwaway gate host share one cert.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: grpc-poc-tls
+  namespace: grpc-poc
+spec:
+  secretName: grpc-poc-tls
+  duration: 2160h
+  renewBefore: 360h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: launchpad-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - grpc.localtest.me
+    - grpc-ref.localtest.me
+---
+# Relay server certificate, extracted to the host filesystem for Envoy's SDS.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: relay-poc-tls
+  namespace: grpc-poc
+spec:
+  secretName: relay-poc-tls
+  duration: 720h
+  renewBefore: 120h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: launchpad-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - relay.localtest.me

@@ -1,0 +1,7 @@
+# Build context is poc/ — binaries are cross-compiled into ./bin first.
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY bin/example-server /usr/local/bin/server
+COPY bin/example-client /usr/local/bin/client
+EXPOSE 50005
+ENTRYPOINT ["/usr/local/bin/server"]

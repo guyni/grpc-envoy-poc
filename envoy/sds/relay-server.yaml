@@ -1,0 +1,8 @@
+version_info: "1"
+resources:
+  - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+    name: relay-server
+    tls_certificate:
+      certificate_chain: { filename: /etc/envoy/tls/current/relay-server.crt }
+      private_key: { filename: /etc/envoy/tls/current/relay-server.key }
+      watched_directory: { path: /etc/envoy/tls }

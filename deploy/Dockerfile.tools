@@ -1,0 +1,8 @@
+# Build context is poc/ — binaries are cross-compiled into ./bin first.
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY bin/msgbroker /usr/local/bin/msgbroker
+COPY bin/agent /usr/local/bin/agent
+COPY bin/certgen /usr/local/bin/certgen
+EXPOSE 50051 9090
+ENTRYPOINT ["/usr/local/bin/msgbroker"]

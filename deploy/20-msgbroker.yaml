@@ -1,0 +1,98 @@
+# The msgbroker stand-in. TLS is optional at runtime: the deployment below
+# starts plaintext (h2c) and the POC switches to TLS if Traefik cannot carry
+# h2c backends. The cert-manager secret is mounted either way.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: msgbroker
+  namespace: grpc-poc
+  labels:
+    app: msgbroker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: msgbroker
+  template:
+    metadata:
+      labels:
+        app: msgbroker
+    spec:
+      containers:
+        - name: msgbroker
+          image: poc-tools:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - -addr=:50051
+            - -stats-addr=:9090
+            - -secret-file=/etc/poc/jwt-secret
+            - -command-interval=5s
+            - -max-streams=1024
+            - -log-level=info
+          ports:
+            - name: grpc
+              containerPort: 50051
+            - name: stats
+              containerPort: 9090
+          readinessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: stats
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: jwt
+              mountPath: /etc/poc
+              readOnly: true
+      volumes:
+        - name: jwt
+          secret:
+            secretName: poc-jwt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: msgbroker
+  namespace: grpc-poc
+spec:
+  selector:
+    app: msgbroker
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      nodePort: 30051
+    - name: stats
+      port: 9090
+      targetPort: stats
+  type: NodePort
+---
+# Public gRPC endpoint: Traefik terminates client TLS, then speaks h2c to the pod.
+#
+# Two findings from getting this to work on Traefik 3.2.2 (see docs/poc_results.md):
+#   - The IngressRoute service port must be the *named* port ("grpc"). A numeric
+#     port resolved to no servers and produced 503.
+#   - The core-Ingress `service.serversscheme: h2c` annotation did not take
+#     effect here (500/502 "missing HTTP content-type"); the IngressRoute CRD did.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: msgbroker
+  namespace: grpc-poc
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`grpc.localtest.me`)
+      services:
+        - name: msgbroker
+          port: grpc
+          scheme: h2c
+  tls:
+    secretName: grpc-poc-tls

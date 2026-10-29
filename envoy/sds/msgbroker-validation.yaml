@@ -1,0 +1,10 @@
+version_info: "1"
+resources:
+  - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+    name: msgbroker-validation
+    validation_context:
+      trusted_ca: { filename: /etc/envoy/tls/current/msgbroker-ca.crt }
+      match_typed_subject_alt_names:
+        - san_type: DNS
+          matcher: { exact: grpc.localtest.me }
+      watched_directory: { path: /etc/envoy/tls }

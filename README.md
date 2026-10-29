@@ -176,6 +176,15 @@ Manual equivalent, if you prefer to keep the cluster:
 ```bash
 docker rm -f poc-relay poc-faultns
 kubectl -n grpc-poc delete all,ingressroute --all
-kubectl -n grpc-poc delete certificate grpc-poc-tls relay-poc-tls relay-poc-tls-v2
+kubectl -n grpc-poc delete certificate grpc-poc-tls relay-poc-tls
 kubectl delete ns grpc-poc
 ```
+
+## References
+
+The mechanism under test is Envoy's HTTP/2 connection pooling:
+
+1. [Connection pooling](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling) — HTTP/2 multiplexes many streams over one connection, bounded by `max_concurrent_streams`.
+2. [gRPC architecture overview](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_protocols/grpc) — only the "same pooling mechanism" sentence applies; the bridging/transcoding filters on that page are not used.
+3. [Upstream HTTP protocol options](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/upstreams/http/v3/http_protocol_options.proto) — where the stream cap is configured.
+4. [HTTP protocol / stream limits](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/protocol.proto) — stream and keepalive settings for the pinned build.

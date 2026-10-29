@@ -98,6 +98,22 @@ Traefik advertises ~250 concurrent streams per connection. With one Envoy worker
 connection up to 200 agents, four at 1000 — exactly `ceil(1000/250)`. Envoy's configured 1024
 cannot override the peer's advertised cap (proposal §4).
 
+Envoy's own documentation describes both halves: HTTP/2 pooling
+["multiplexes multiple requests over a single connection"](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling),
+opening more connections only when the stream limit is reached and marking a full connection
+"busy until a stream is available"; the limit itself is configured through
+[upstream HTTP/2 protocol options](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/upstreams/http/v3/http_protocol_options.proto).
+There is no gRPC-specific multiplexing setting — gRPC clusters
+[share the same connection pooling mechanism](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_protocols/grpc)
+as the rest of the data plane.
+
+Note what the documentation does and does not claim. It describes the mechanism: streams are
+multiplexed onto a connection, and "new connections are established anytime there is a pending
+request" — there is no pool-size setting. A *smaller* number of upstream connections is an
+emergent consequence of multiplexing, the peer's stream cap and the worker count; Envoy does
+not document a connection-reduction feature. The evidence for the reduction is the measurement
+in §3, not an upstream promise.
+
 ### Backend sockets (context, not the metric)
 
 msgbroker itself sees **one** accepted connection on both paths at every agent count: that is
@@ -222,3 +238,29 @@ cd grpc-envoy-poc                  # the repo root
 
 The substantive gap is one-direction packet loss, which needs a kernel-level traffic pattern
 this laptop setup does not reproduce.
+
+---
+
+## 10. References
+
+Official Envoy documentation checked 2026-10-29. Pin links to the release you deploy; the
+`latest` docs can describe development versions.
+
+1. [Connection pooling](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling) —
+   HTTP/2 pooling multiplexes many requests over one connection, bounded by
+   `max_concurrent_streams`; with no limit "this will be only a single connection".
+2. [gRPC architecture overview](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_protocols/grpc) —
+   only its connection-management sentence is relevant here: gRPC services are ordinary
+   clusters that share the data plane's pooling mechanism. The bridging and transcoding
+   filters described on the same page (gRPC-JSON, gRPC-Web, …) are **not** used by this relay;
+   the path is native gRPC over HTTP/2 end to end.
+3. [Upstream HTTP protocol options](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/upstreams/http/v3/http_protocol_options.proto) —
+   where `explicit_http_config.http2_protocol_options.max_concurrent_streams` is set
+   (`../envoy/envoy.yaml.tmpl`).
+4. [HTTP protocol and HTTP/2 settings](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/protocol.proto) —
+   stream limits and keepalive policy for the pinned build.
+5. [Filesystem SDS](https://www.envoyproxy.io/docs/envoy/latest/configuration/security/secret) —
+   how the relay loads its TLS material from `/etc/envoy/sds`.
+6. [Circuit breakers](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/circuit_breaker.proto) —
+   `max_connections` / `max_pending_requests` / `max_requests` bound the pool; they are safety
+   ceilings, not a desired pool size.

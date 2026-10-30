@@ -1,0 +1,26 @@
+# Traefik acting as the host relay (alternative to Envoy).
+# Run with: traefik --configFile=/etc/traefik/traefik.yaml
+#
+# Same role as envoy/envoy.yaml.tmpl: terminate agent TLS on :8443, require an
+# agent client certificate, and forward the gRPC streams to the public endpoint
+# over a pooled HTTP/2 connection. Only the file provider is enabled.
+entryPoints:
+  relay:
+    address: ":8443"
+    http:
+      tls: {}
+  metrics:
+    address: ":9100"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yaml
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+
+log:
+  level: INFO
+
+accessLog: {}

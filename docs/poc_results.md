@@ -47,7 +47,8 @@ Two things temper that result:
   did not reproduce. Treat these loopback numbers as an order of magnitude, not an SLO.
 
 Streams are unchanged at every size and every command was acked with zero cross-agent
-deliveries.
+deliveries. A Traefik-as-relay variant pools identically (§3) but lacks an equivalent of the
+socket timeout that bounded blackhole detection.
 
 ---
 
@@ -117,6 +118,39 @@ request" — there is no pool-size setting. A *smaller* number of upstream conne
 emergent consequence of multiplexing, the peer's stream cap and the worker count; Envoy does
 not document a connection-reduction feature. The evidence for the reduction is the measurement
 in §3, not an upstream promise.
+
+### Alternative relay: Traefik instead of Envoy
+
+The same relay role was also built with Traefik (`relay-traefik/`, `scripts/45-relay-traefik-up.sh`,
+`46-run-traefik-relay.sh`, `47-blackhole-traefik.sh`), same client contract on `:8443`.
+
+| Agents | Conns at the relay | Conns into `:443` | Sockets at msgbroker | p50 / p99 |
+| --- | --- | --- | --- | --- |
+| 5 | 5 | 1 | 1 | 1.60 / 3.22 ms |
+| 10 | 10 | 1 | 1 | 2.48 / 2.93 ms |
+| 200 | 200 | 1 | 1 | 0.48 / 2.82 ms |
+| 1000 | 1000 | 4 | 1 | 0.29 / 2.08 ms |
+
+Pooling is identical to Envoy, including `ceil(1000/250)=4` into the ingress, and latency is
+within the same noisy range. A first 10-agent run reported 7/10 connects; a repeat gave 10/10,
+so that was a warm-up flake, and the 1000-agent run had 19 reconnects (no mismatches, all
+commands acked).
+
+Where it differs:
+
+- **No SAN-prefix admission.** `clientAuth.caFiles` verifies the chain against the agent CA,
+  but Traefik has no equivalent of Envoy's URI-SAN prefix matcher: a certificate issued for
+  another cluster would be admitted. Cluster scoping needs a middleware.
+- **No `TCP_USER_TIMEOUT`.** In the blackhole test the msgbroker stream count stayed at 5 for
+  40 s after the path was cut, then dropped to 0; clients (heartbeat 15 s) reconnected 32
+  times, and after restoration only 2–3 of 5 sessions had recovered within 29 s, the rest in
+  jittered backoff. Envoy: 41 s detection and 5/5 recovered 26 s after restore.
+- **Config differences found:** v3.2 rejects `certFile` in static entrypoint TLS (certificates
+  must be in dynamic `tls.certificates`), rejects `requireAnyClientCertificate` in this build,
+  and needs `passHostHeader: false` to emulate Envoy's `host_rewrite_literal`.
+
+Verdict: viable, and one less product to operate — but weaker on admission scoping and without
+the socket-level timeout that bounded the Envoy relay's blackhole detection.
 
 ### Backend sockets (context, not the metric)
 
@@ -194,6 +228,14 @@ the 60 s HTTP/2 PING.
    only 2 of 5 sessions that way. The agent now requires `Welcome` within its heartbeat
    timeout and reconnects otherwise; recovery is 5/5.
 
+9. **Traefik can serve as the relay, but not with parity.** A Traefik relay reproduced the
+   pooling exactly (1000 agents → 4 connections into the ingress, 1 socket at msgbroker) with
+   comparable latency, and it removes a second product from the host. It cannot match two
+   things: URI-SAN prefix admission (any certificate from the agent CA is admitted, so one
+   issued for another cluster would be accepted), and a socket-level timeout — after an
+   upstream blackhole the msgbroker streams stayed open for 40 s with no identifiable trigger,
+   and only 2–3 of 5 agents recovered within 29 s of restoration (Envoy: 5/5 in 26 s).
+
 ---
 
 ## 7. What this POC does not prove
@@ -206,6 +248,8 @@ the 60 s HTTP/2 PING.
   token issuance, CRL distribution, or agent certificate renewal.
 - A 24-hour soak. The longest run was 1000 agents for 60 s.
 - The one-direction-loss failure case; only a complete blackhole was measured.
+- The Traefik relay variant was exercised at 5–1000 agents and one blackhole scenario only;
+  the 40 s detection in that test has no identified mechanism.
 - Latency beyond same-host loopback.
 
 ---
@@ -223,6 +267,11 @@ cd grpc-envoy-poc                  # the repo root
 ./scripts/50-run-path.sh --path p2 --agents 10 --duration 20s   # via relay
 ./scripts/60-auth-matrix.sh
 ./scripts/70-faults.sh upstream-reset app-hang relay-restart blackhole
+
+# Alternative relay (Traefik) and its blackhole test
+./scripts/45-relay-traefik-up.sh
+./scripts/46-run-traefik-relay.sh 10 20
+./scripts/47-blackhole-traefik.sh
 ```
 
 ---
@@ -247,7 +296,7 @@ this laptop setup does not reproduce.
 
 ## 10. References
 
-Official Envoy documentation checked 2026-10-29. Pin links to the release you deploy; the
+Official Envoy and Traefik documentation checked 2026-10-29. Pin links to the release you deploy; the
 `latest` docs can describe development versions.
 
 1. [Connection pooling](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling) —
@@ -268,3 +317,10 @@ Official Envoy documentation checked 2026-10-29. Pin links to the release you de
 6. [Circuit breakers](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/circuit_breaker.proto) —
    `max_connections` / `max_pending_requests` / `max_requests` bound the pool; they are safety
    ceilings, not a desired pool size.
+7. [Traefik services and ServersTransport](https://doc.traefik.io/traefik/routing/services/#serverstransport) —
+   backend transport settings (`maxIdleConnsPerHost`, `disableHTTP2`, `passHostHeader`) for the
+   Traefik relay variant.
+8. [Traefik gRPC guide](https://doc.traefik.io/traefik/user-guides/grpc/) — h2c backends and
+   gRPC routing.
+9. [Traefik TLS](https://doc.traefik.io/traefik/https/tls/) — certificates and client-certificate
+   options used by the Traefik relay (no URI-SAN prefix matching available).

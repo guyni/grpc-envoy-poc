@@ -1,0 +1,43 @@
+# Dynamic configuration for the Traefik relay (file provider).
+#
+# Mirrors the Envoy relay's routing and TLS policy:
+#   - agents must present a certificate signed by the agent CA
+#     (Traefik has no SAN-prefix matcher, so cluster scoping is not enforced here)
+#   - the upstream leg validates the public endpoint certificate by name
+#   - only the msgbroker RPC path is routed; everything else 404s
+tls:
+  certificates:
+    - certFile: /tls/current/relay-server.crt
+      keyFile: /tls/current/relay-server.key
+  options:
+    relay:
+      clientAuth:
+        caFiles:
+          - /tls/current/agent-ca.crt
+
+http:
+  serversTransports:
+    upstream:
+      serverName: grpc.localtest.me
+      rootCAs:
+        - /tls/current/msgbroker-ca.crt
+      # HTTP/2 to the backend is the default; do not disable it.
+
+  routers:
+    relay:
+      entryPoints:
+        - relay
+      rule: "Host(`relay.localtest.me`) && PathPrefix(`/msgbroker.v1.MsgBroker/`)"
+      service: upstream
+      tls:
+        options: relay
+
+  services:
+    upstream:
+      loadBalancer:
+        # Match Envoy's host_rewrite: send the upstream URL's Host, so the
+        # ingress router (Host(grpc.localtest.me)) matches.
+        passHostHeader: false
+        servers:
+          - url: "https://grpc.localtest.me:443"
+        serversTransport: upstream

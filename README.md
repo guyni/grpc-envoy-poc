@@ -135,11 +135,30 @@ OS-level cross-check is `docker exec grpc-poc-control-plane ss -tn '( sport = :4
 Each writes its evidence under `out/`. Hand-testing recipes (single agent, grpcurl,
 live socket watch, fault injection) are in [`docs/manual_testing.md`](docs/manual_testing.md).
 
+## Alternative relay: Traefik
+
+`relay-traefik/` implements the same relay with Traefik instead of Envoy: agent TLS with client
+certificate verification on `:8443`, and a pooled HTTP/2 connection to `grpc.localtest.me:443`.
+
+```bash
+./scripts/45-relay-traefik-up.sh          # replaces the Envoy relay on :8443
+./scripts/46-run-traefik-relay.sh 10 20   # agents, seconds
+./scripts/47-blackhole-traefik.sh         # upstream blackhole test
+./scripts/40-relay-up.sh                  # switch back to Envoy
+```
+
+Measured: pooling identical to Envoy (5/10/200/1000 agents → 1/1/1/4 connections into `:443`,
+one socket at msgbroker) with comparable latency. Two gaps: no URI-SAN prefix matcher, so any
+certificate signed by the agent CA is admitted (a certificate for another cluster would pass),
+and no `TCP_USER_TIMEOUT` — blackhole detection and post-restore recovery were worse than the
+Envoy relay's. Details in `docs/poc_results.md` §3.
+
 ## Known limitations
 
 - One-direction packet loss, a 24 h soak, and a real control-plane host with systemd and
   host networking during a Kubernetes outage were not exercised.
-- The relay always shows at least two upstream connections: one per busy Envoy worker.
+- The relay holds one upstream connection per busy Envoy worker (one worker = one connection;
+  `ENVOY_CONCURRENCY=2` gives two).
 
 ## Notes on the cluster
 

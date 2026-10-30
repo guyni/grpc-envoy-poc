@@ -19,13 +19,13 @@ fi
 
 if [[ ! -f "$CERTS_DIR/agents/agent-0000.crt" ]]; then
   log "issuing $COUNT agent certificates (cluster poc)"
-  "$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents" -n "$COUNT" -cluster poc -ttl 24h
+  "$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents" -n "$COUNT" -cluster poc -ttl 168h
 fi
 
 log "issuing negative-test certificates"
-"$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents-wrong-cluster" -n 1 -cluster prod-east -ttl 24h
+"$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents-wrong-cluster" -n 1 -cluster prod-east -ttl 168h
 "$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents-expired" -n 1 -cluster poc -expired
-"$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents-foreign" -n 1 -cluster poc -ttl 24h -foreign
+"$CG" agents -ca "$CERTS_DIR/agent-ca" -out "$CERTS_DIR/agents-foreign" -n 1 -cluster poc -ttl 168h -foreign
 
 log "assembling the relay's versioned TLS directory"
 V="$CERTS_DIR/relay/v1"

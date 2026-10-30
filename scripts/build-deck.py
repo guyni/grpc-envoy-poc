@@ -224,7 +224,7 @@ table(s, [
 box(s, 10.4, 2.2, 2.4, 1.1, '1000 → 4', fill=LIGHT, color=TEAL, size=26)
 text(s, 10.2, 3.4, 2.8, 0.8, 'at the public endpoint', size=12, align=PP_ALIGN.CENTER)
 bullets(s, ['Every command acked, zero cross-agent deliveries, zero reconnects'], top=5.6, height=1.0, size=17)
-notes(s, 'Read the table out loud, then the sentence the proposal cares about: without the relay the endpoint holds one connection per agent; with it, the relay pool. Growth from 1 to 4 at 1000 agents is the peer stream cap being reached, not a bug.')
+notes(s, 'With ENVOY_CONCURRENCY=2 the pool is 2 at 5-200 agents and 5 at 1000. Read the table out loud, then the sentence the proposal cares about: without the relay the endpoint holds one connection per agent; with it, the relay pool. Growth from 1 to 4 at 1000 agents is the peer stream cap being reached, not a bug.')
 
 # ---------------------------------------------------------------- slide 8
 s = slide()
@@ -262,28 +262,22 @@ notes(s, 'This is the finding that changes the recommendation. Our baseline answ
 
 # ---------------------------------------------------------------- slide 10
 s = slide()
-title(s, 'Latency: better small, worse in the tail')
-data = CategoryChartData()
-data.categories = ['5', '10', '200', '1000']
-data.add_series('P1 - direct', (2.08, 2.72, 1.33, 1.18))
-data.add_series('P2 - relay', (0.42, 0.93, 8.07, 9.34))
-gf = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.9), Inches(1.8),
-                        Inches(7.8), Inches(4.7), data)
-chart = gf.chart
-chart.has_title = True
-chart.chart_title.text_frame.text = 'Command latency p99 (ms) by agent count'
-chart.has_legend = True
-chart.legend.position = XL_LEGEND_POSITION.BOTTOM
-chart.legend.include_in_layout = False
-plot = chart.plots[0]
-plot.has_data_labels = True
-plot.data_labels.font.size = Pt(10)
+title(s, 'Latency: adds milliseconds, with high variance')
+table(s, [
+    ['Agents', 'P1 direct', 'P2, 1 worker', 'P2, 2 workers'],
+    ['5', '0.31 / 1.05', '2.18 / 2.41', '0.75 / 1.00'],
+    ['10', '0.65 / 1.89', '3.10 / 4.42', '0.98 / 2.41'],
+    ['200', '0.33 / 0.98', '0.54 / 2.05', '0.35 / 3.40'],
+    ['1000', '0.29 / 1.28', '0.35 / 2.1-2.8', '0.34 / 2.3-7.4'],
+], left=0.9, top=1.8, width=7.6, height=3.0, widths=[1.4, 1.9, 2.1, 2.2])
+text(s, 0.9, 5.0, 7.6, 0.5, 'p50 / p99 in ms; ranges span two runs at 1000 agents', size=13)
 bullets(s, [
-    'Small N: fewer TLS handshakes, one pooled hop - relay is faster',
-    "At scale: 1000 streams share one worker's pools and flow-control windows",
-    'Same-host loopback, so this isolates relay cost without WAN effects',
-], left=9.0, top=2.0, width=3.9, height=4.4, size=14)
-notes(s, 'The proposal warns that a shared pooled connection shares congestion and flow control. The 1000-agent p99 is the local evidence of that trade-off.')
+    'Relay adds roughly 1-3 ms to p99 versus a direct connection',
+    'At 1000 agents the run-to-run spread exceeds the 1-vs-2 worker difference',
+    'Worker count is a latency knob (pool 1 vs 2), not a stable fix',
+    'Loopback only: isolates relay cost, not WAN behaviour',
+], left=8.9, top=1.9, width=4.0, height=4.4, size=14)
+notes(s, 'The earlier single-run 9 ms p99 did not reproduce; repeats overlap. Report these as an order of magnitude, and re-measure on the real path before treating any of it as an SLO.')
 
 # ---------------------------------------------------------------- slide 11
 s = slide()
@@ -304,10 +298,10 @@ s = slide()
 title(s, 'Failure behaviour at 5 agents')
 table(s, [
     ['Event', 'Detection', 'Recovery'],
-    ['Upstream TCP reset', 'immediate', '2 s'],
+    ['Upstream TCP reset', 'immediate', '3 s'],
     ['Relay restart', 'immediate', '2 s'],
-    ['App hang, transport healthy', '10 s (heartbeat)', '1 s after release'],
-    ['Silent blackhole', '40 s (TCP_USER_TIMEOUT)', '25 s after restore'],
+    ['App hang, transport healthy', '12 s (heartbeat)', '4 s after release'],
+    ['Silent blackhole', '41 s (TCP_USER_TIMEOUT)', '26 s after restore'],
 ], left=0.9, top=1.9, width=11.4, height=3.2, widths=[5.0, 3.4, 3.0])
 bullets(s, [
     'A live stream is not a live session: if the app stalls while Hello is in flight, the stream stays up but the agent is unregistered',

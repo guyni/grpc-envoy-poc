@@ -24,7 +24,7 @@ Every number in the last two columns is a count of **TCP connections into the gR
 `grpc.localtest.me:443`** — measured from Traefik's `websecure` entrypoint, not inferred from
 the agent count. "Relay upstream pool" is the same quantity seen from Envoy's side.
 
-| Agents | Relay upstream pool | P1 — no relay: conns into `grpc.localtest.me:443` | P2 — relay: conns into `grpc.localtest.me:443` |
+| Agents | Relay pool (1 worker) | P1 — no relay: conns into `grpc.localtest.me:443` | P2 — relay: conns into `grpc.localtest.me:443` |
 | --- | --- | --- | --- |
 | 5 | 1 | **5** | **1** |
 | 10 | 1 | **10** | **1** |
@@ -33,7 +33,7 @@ the agent count. "Relay upstream pool" is the same quantity seen from Envoy's si
 
 Without the relay the endpoint holds one connection per agent; with it the endpoint holds
 the relay's pool — 1 while streams stay under the negotiated cap, 4 at 1000 agents
-(`ceil(1000/250)`).
+(`ceil(1000/250)`). With `ENVOY_CONCURRENCY=2` the pool is 2 at 5–200 agents and 5 at 1000.
 
 Two things temper that result:
 
@@ -41,9 +41,10 @@ Two things temper that result:
   msgbroker at every agent count on both paths. So the relay reduces the endpoint's
   connections, but does not reduce what msgbroker sees — and at fewer than ~250 streams
   (the realistic fleet is under 10 agents) it adds a hop for no backend benefit.
-- **The relay costs tail latency at scale.** p99 at 200/1000 agents is 8–9 ms through the
-  relay against 1.2–1.3 ms direct; at 5/10 agents the relay is *faster*. One worker and
-  shared pooled flow control are the likely causes.
+- **The relay adds latency in this environment.** p99 through the relay measured 1–4 ms at
+  5–200 agents and 2–8 ms at 1000, against 1.0–1.3 ms direct. Run-to-run variance at 1000
+  agents was as large as the gap between worker settings, and an earlier 9 ms observation
+  did not reproduce. Treat these loopback numbers as an order of magnitude, not an SLO.
 
 Streams are unchanged at every size and every command was acked with zero cross-agent
 deliveries.
@@ -77,20 +78,23 @@ Traefik's metrics and sampled every second — measured, not inferred from the a
 | 10 | P2 | **1** | 1 | 10 | 20/20 | 0 | 0 |
 | 200 | P1 | **200** | – | 200 | 1400/1400 | 0 | 0 |
 | 200 | P2 | **1** | 1 | 200 | 1400/1400 | 0 | 0 |
-| 1000 | P1 | **1000** | – | 1000 | 11000/11000 | 0 | 0 |
-| 1000 | P2 | **4** | 4 | 1000 | 11000/11000 | 0 | 0 |
+| 1000 | P1 | **1000** | – | 1000 | 8000/8000 | 0 | 0 |
+| 1000 | P2 | **4** | 4 | 1000 | 8000/8000 | 0 | 0 |
 
-Command latency (loopback):
+Command latency (loopback), p50 / p99 in ms. P2 is shown for both worker settings because
+the relay's `--concurrency` is a latency knob, not just a pool size:
 
-| Agents | P1 p50 / p99 | P2 p50 / p99 |
-| --- | --- | --- |
-| 5 | 0.38 / 2.08 ms | 0.34 / 0.42 ms |
-| 10 | 0.39 / 2.72 ms | 0.36 / 0.93 ms |
-| 200 | 0.29 / 1.33 ms | 0.50 / 8.07 ms |
-| 1000 | 0.26 / 1.18 ms | 0.34 / 9.34 ms |
+| Agents | P1 direct | P2, 1 worker | P2, 2 workers |
+| --- | --- | --- | --- |
+| 5 | 0.31 / 1.05 | 2.18 / 2.41 | 0.75 / 1.00 |
+| 10 | 0.65 / 1.89 | 3.10 / 4.42 | 0.98 / 2.41 |
+| 200 | 0.33 / 0.98 | 0.54 / 2.05 | 0.35 / 3.40 |
+| 1000 | 0.29 / 1.28 | 0.35 / 2.12–2.82 † | 0.34 / 2.32–7.40 † |
 
-The relay is faster at small N (fewer TLS handshakes per agent, one pooled hop) and slower in
-the tail at scale, where 1000 streams share one worker's pools and flow-control windows.
+† range across two runs. At 1000 agents the spread between repeats (≈1–5 ms) is larger than
+the difference between one and two workers, so this POC does not claim a worker-count effect.
+What is consistent is that the relay adds roughly 1–3 ms to p99 versus a direct connection,
+and that these are single-host loopback numbers: they isolate relay cost, not WAN behaviour.
 
 ### Effective stream cap
 
@@ -154,10 +158,10 @@ return to ≥90 %. Full samples under `../out/faults/`.
 
 | Event | Injection | Detection | Recovery |
 | --- | --- | --- | --- |
-| Upstream TCP reset (`ss -K`) | at t=15 s | immediate | **2 s** |
+| Upstream TCP reset (`ss -K`) | at t=15 s | immediate | **3 s** |
 | Relay restart | at t≈15 s | immediate | **2 s** |
-| Application hang, transport healthy | at t=20 s | **10 s** (client heartbeat timeout 10 s) | **1 s** after release |
-| Complete silent blackhole | at t=20 s | **40 s** (40 s `TCP_USER_TIMEOUT`) | **25 s** after the path was restored |
+| Application hang, transport healthy | at t=20 s | **12 s** (client heartbeat timeout 10 s) | **4 s** after release |
+| Complete silent blackhole | at t=20 s | **41 s** (40 s `TCP_USER_TIMEOUT`) | **26 s** after the path was restored |
 
 The app-hang case is the one the proposal insists on separating from a blackhole: with the
 handlers stalled, TCP and HTTP/2 stay healthy, so only the application heartbeat detects it;
@@ -227,12 +231,12 @@ cd grpc-envoy-poc                  # the repo root
 
 | Proposal criterion | POC status |
 | --- | --- |
-| All synthetic agents hold an independently authenticated bidi call | Met — 1000 agents, 1000 sessions, 11 000 commands acked |
+| All synthetic agents hold an independently authenticated bidi call | Met — 1000 agents, 1000 concurrent sessions, 8 000 commands acked in a 45 s run |
 | Steady-state TCP connections into the public endpoint ≥10× below the direct baseline | Met from 10 agents up — 10→1 at 10 agents, 200→1, 1000→4; at 5 agents it is 5→1 |
 | Application pod socket budget | N/A here — the ingress, not the relay, determines backend sockets (1 on both paths) |
 | No cross-agent command delivery | Met — 0 mismatches in every run |
-| ≥99 % recover within 120 s after a pooled TCP reset | Met — 5/5 streams back 2 s after the reset |
-| ≥99 % recover within 120 s of restoring relay/network availability | Met — relay restart 2 s; blackhole 25 s after the path returned |
+| ≥99 % recover within 120 s after a pooled TCP reset | Met — 5/5 streams back 3 s after the reset |
+| ≥99 % recover within 120 s of restoring relay/network availability | Met — relay restart 2 s; blackhole 26 s after the path returned |
 | Record detection and recovery separately for the four failure cases | Three measured; one-direction loss not measured |
 | Validate the pinned build, h2 negotiation, mTLS, token forwarding, SAN validation | Met, with the config deltas in §6 |
 
